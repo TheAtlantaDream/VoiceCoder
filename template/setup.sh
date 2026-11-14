@@ -3,6 +3,7 @@
 set -uo pipefail
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
+RUNTIME=${VC_RUNTIME:-native}
 mkdir -p ~/bin ~/.local ~/logs
 log(){ echo "[setup] $*"; }
 export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH
@@ -24,19 +25,54 @@ sync_repo voicecoder-bridge voicecoder-bridge
 sync_repo beta-test-demo beta-test-demo
 mkdir -p ~/beta-test-demo
 
-# 3. whisper
+# 3. whisper (native mode only)
+if [ "$RUNTIME" = native ]; then
 if [ ! -x ~/whisper.cpp/build/bin/whisper-server ]; then log "building whisper (a few minutes the first time)"; [ -d ~/whisper.cpp ] || git clone -q --depth 1 https://github.com/ggml-org/whisper.cpp ~/whisper.cpp; (cd ~/whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release > ~/logs/cmake.log 2>&1 && cmake --build build -j$(nproc) --target whisper-server >> ~/logs/cmake.log 2>&1); fi
 [ -f ~/whisper.cpp/models/ggml-small.en.bin ] || { log "downloading whisper model"; (cd ~/whisper.cpp && bash models/download-ggml-model.sh small.en >/dev/null 2>&1); }
+fi
 
 # 4. services
-up(){ (echo > /dev/tcp/127.0.0.1/$1) >/dev/null 2>&1; }
+up(){ (echo > /dev/tcp/${2:-127.0.0.1}/$1) >/dev/null 2>&1; }
 start(){ n=$1; p=$2; shift 2; if up $p; then log "$n already on $p"; else log "starting $n on $p"; nohup "$@" > ~/logs/$n.log 2>&1 & disown; fi; }
-T=$(nproc); [ $T -le 8 ] || T=8
-start whisper 8080 ~/whisper.cpp/build/bin/whisper-server -m ~/whisper.cpp/models/ggml-small.en.bin --host 127.0.0.1 --port 8080 -t $T
-if [ -d ~/voicecoder-bridge/cmd/bridge ]; then (cd ~/voicecoder-bridge && go build -o ~/bin/voicecoder-bridge ./cmd/bridge) && start bridge 8000 ~/bin/voicecoder-bridge -addr :8000 -whisper-url http://localhost:8080; fi
+SVC=127.0.0.1
+
+if [ "$RUNTIME" = compose ]; then
+  SVC=host.docker.internal
+  log "runtime: docker compose on host Docker"
+  # docker CLI and compose plugin into the home folder
+  if [ ! -x ~/bin/docker ]; then log "installing docker cli"; curl -sL https://download.docker.com/linux/static/stable/$(uname -m)/docker-28.5.1.tgz | tar -xz -C /tmp && mv /tmp/docker/docker ~/bin/; fi
+  if [ ! -x ~/.docker/cli-plugins/docker-compose ]; then log "installing compose plugin"; mkdir -p ~/.docker/cli-plugins; curl -sL -o ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m); chmod +x ~/.docker/cli-plugins/docker-compose; fi
+  [ -w /var/run/docker.sock ] || sudo -n chmod 666 /var/run/docker.sock
+  # submodules: the repo's .gitmodules URLs are missing https://, so override them locally
+  if [ -d ~/voicecoder/.git ]; then
+    cd ~/voicecoder
+    git submodule init -q
+    git config submodule.bridge.url https://github.com/TheAtlantaDream/voicecoder-bridge
+    git config submodule.frontend.url https://github.com/TheAtlantaDream/VoiceCoder-frontend
+    git submodule update -q --remote || log "submodule update failed"
+    # same project name for both steps, so the model lands in the volume whisper reads
+    export COMPOSE_PROJECT_NAME=voicecoder
+    log "downloading whisper model (model-download.sh, skips if present)"
+    docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || log "model download failed, see ~/logs/model-download.log"
+    log "docker compose up (first build takes several minutes)"
+    docker compose up -d --build > ~/logs/compose.log 2>&1 || log "compose up failed, see ~/logs/compose.log"
+    cd ~
+  else
+    log "skip compose: ~/voicecoder missing"
+  fi
+else
+  log "runtime: native"
+  T=$(nproc); [ $T -le 8 ] || T=8
+  start whisper 8080 ~/whisper.cpp/build/bin/whisper-server -m ~/whisper.cpp/models/ggml-small.en.bin --host 127.0.0.1 --port 8080 -t $T
+  if [ -d ~/voicecoder-bridge/cmd/bridge ]; then (cd ~/voicecoder-bridge && go build -o ~/bin/voicecoder-bridge ./cmd/bridge) && start bridge 8000 ~/bin/voicecoder-bridge -addr :8000 -whisper-url http://localhost:8080; fi
+fi
+
+# these always run inside the workspace
 if [ -d ~/beta-test-demo/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/beta-test-demo && exec agentapi server -- claude'; else log "skip agentapi: needs beta-test-demo repo and API key"; fi
 if [ -f ~/voicecoder/server/go.mod ]; then (cd ~/voicecoder/server && go build -o ~/bin/voicecoder-server .) && start server 8090 ~/bin/voicecoder-server; else log "skip server 8090: voicecoder/server not pushed yet"; fi
 
 sleep 3
-for pr in 8080:whisper 8000:bridge 3284:agentapi 8090:server; do up ${pr%%:*} && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
+for pr in 8080:whisper 8000:bridge; do up ${pr%%:*} $SVC && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
+[ "$RUNTIME" = compose ] && { up 80 $SVC && log "OK   frontend (80)" || log "DOWN frontend (80)"; }
+for pr in 3284:agentapi 8090:server; do up ${pr%%:*} && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
 exit 0
