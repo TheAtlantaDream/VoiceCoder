@@ -10,7 +10,8 @@ case $(uname -m) in x86_64) GOARCH=amd64; NARCH=x64;; aarch64) GOARCH=arm64; NAR
 ORG=https://github.com/TheAtlantaDream
 
 # 1. tools
-if ! command -v cmake >/dev/null || ! command -v socat >/dev/null; then sudo -n apt-get update -qq && sudo -n apt-get install -y -qq cmake build-essential socat; fi
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v cmake >/dev/null || ! command -v socat >/dev/null; then sudo -n apt-get update -qq && sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake build-essential socat; fi
 if [ ! -x ~/.local/go/bin/go ]; then log "installing go"; V=$(curl -s "https://go.dev/VERSION?m=text" | head -1); curl -sL https://go.dev/dl/$V.linux-$GOARCH.tar.gz | tar -C ~/.local -xz; fi
 if [ ! -x ~/.local/node/bin/node ]; then log "installing node"; F=$(curl -s https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep "linux-$NARCH.tar.xz" | awk '{print $2}'); mkdir -p ~/.local/node; curl -sL https://nodejs.org/dist/latest-v22.x/$F | tar -xJ -C ~/.local/node --strip-components=1; fi
 grep -q voicecoder-path ~/.bashrc 2>/dev/null || echo 'export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH # voicecoder-path' >> ~/.bashrc
@@ -73,18 +74,24 @@ if [ -d ~/voicecoder/.git ]; then
     tail -n 80 ~/logs/compose.log 2>/dev/null || true
   fi
 
-  # Wait for STT; without it the bridge reports "no such host" for whisper.
+  # Wait for STT process (healthz). Model may still be loading in the background.
   log "waiting for whisper/parakeet health"
   whisper_ok=0
-  for i in $(seq 1 60); do
-    if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1; then
+  for i in $(seq 1 36); do
+    if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
       whisper_ok=1
       break
     fi
     sleep 5
   done
   if [ "$whisper_ok" = 1 ]; then
-    log "OK   whisper"
+    log "OK   whisper process"
+    if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/ready >/dev/null 2>&1; then
+      log "OK   whisper model ready"
+    else
+      log "whisper model still loading — first utterances may fail until ready"
+      docker compose logs --tail 30 whisper || true
+    fi
   else
     log "DOWN whisper — speech will fail. Logs:"
     docker compose ps whisper >> ~/logs/compose.log 2>&1 || true
