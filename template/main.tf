@@ -66,13 +66,15 @@ resource "coder_agent" "main" {
   }
 }
 
-# Clones the repos, downloads the Whisper model, then starts Compose. The first build is slow.
+# Clones the repos, downloads the STT model, then starts Compose.
+# Does not block login: first boot still takes a while in the background, but
+# the workspace stays connected while images build.
 resource "coder_script" "voicecoder_setup" {
   agent_id           = coder_agent.main.id
   display_name       = "VoiceCoder setup"
   icon               = "/icon/terminal.svg"
   run_on_start       = true
-  start_blocks_login = true
+  start_blocks_login = false
   timeout            = 3600
   script             = file("${path.module}/setup.sh")
 }

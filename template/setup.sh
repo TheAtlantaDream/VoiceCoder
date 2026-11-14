@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
 # VoiceCoder workspace setup. Safe to run twice.
+# Kept lean so restarts are fast; first boot still builds Compose images once.
 set -uo pipefail
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
+export DEBIAN_FRONTEND=noninteractive
 mkdir -p ~/bin ~/.local ~/logs ~/project
 log(){ echo "[setup] $*"; }
 export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH
 case $(uname -m) in x86_64) GOARCH=amd64; NARCH=x64;; aarch64) GOARCH=arm64; NARCH=arm64;; esac
 ORG=https://github.com/TheAtlantaDream
 
-# 1. tools
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v cmake >/dev/null || ! command -v socat >/dev/null; then sudo -n apt-get update -qq && sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake build-essential socat; fi
-if [ ! -x ~/.local/go/bin/go ]; then log "installing go"; V=$(curl -s "https://go.dev/VERSION?m=text" | head -1); curl -sL https://go.dev/dl/$V.linux-$GOARCH.tar.gz | tar -C ~/.local -xz; fi
-if [ ! -x ~/.local/node/bin/node ]; then log "installing node"; F=$(curl -s https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep "linux-$NARCH.tar.xz" | awk '{print $2}'); mkdir -p ~/.local/node; curl -sL https://nodejs.org/dist/latest-v22.x/$F | tar -xJ -C ~/.local/node --strip-components=1; fi
+# 1. tools (only missing pieces — no cmake/build-essential; Parakeet does not need them)
+if ! command -v socat >/dev/null; then
+  log "installing socat"
+  sudo -n apt-get update -qq && sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -qq socat
+fi
+# Go/Node are only needed if someone builds outside Compose; skip on typical boots.
+if [ ! -x ~/bin/agentapi ]; then
+  log "installing agentapi"
+  curl -sL -o ~/bin/agentapi "https://github.com/coder/agentapi/releases/latest/download/agentapi-linux-$GOARCH"
+  chmod +x ~/bin/agentapi
+fi
+command -v claude >/dev/null || {
+  if [ ! -x ~/.local/node/bin/node ]; then
+    log "installing node (for Claude Code)"
+    F=$(curl -s https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep "linux-$NARCH.tar.xz" | awk '{print $2}')
+    mkdir -p ~/.local/node
+    curl -sL "https://nodejs.org/dist/latest-v22.x/$F" | tar -xJ -C ~/.local/node --strip-components=1
+  fi
+  log "installing claude code"
+  npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 || log "claude install failed"
+}
 grep -q voicecoder-path ~/.bashrc 2>/dev/null || echo 'export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH # voicecoder-path' >> ~/.bashrc
-if [ ! -x ~/bin/agentapi ]; then log "installing agentapi"; curl -sL -o ~/bin/agentapi https://github.com/coder/agentapi/releases/latest/download/agentapi-linux-$GOARCH; chmod +x ~/bin/agentapi; fi
-command -v claude >/dev/null || { log "installing claude code"; npm install -g @anthropic-ai/claude-code >/dev/null 2>&1; }
 
 # 2. repos
 sync_repo(){ if [ -d ~/$1/.git ]; then git -C ~/$1 pull --ff-only -q || log "pull skipped for $1"; else git clone -q $ORG/$2 ~/$1 || log "clone skipped for $2 (not pushed yet?)"; fi; }
@@ -24,7 +40,6 @@ sync_repo voicecoder VoiceCoder
 [ -d ~/project/.git ] || git -C ~/project init -q
 git config --global user.email >/dev/null || { git config --global user.name "VoiceCoder User"; git config --global user.email "voicecoder@localhost"; }
 
-# agent rules for the whole workspace: create, or append if our section is missing. Never overwrite.
 mkdir -p ~/.claude
 if ! grep -q "# VoiceCoder rules" ~/.claude/CLAUDE.md 2>/dev/null; then
   [ -s ~/.claude/CLAUDE.md ] && echo >> ~/.claude/CLAUDE.md
@@ -40,17 +55,27 @@ RULES
   log "wrote VoiceCoder rules to ~/.claude/CLAUDE.md"
 fi
 
-# 3. services. Compose runs on the host Docker. The frontend proxies /ws to the bridge and /vscode/ to VS Code.
+# 3. Compose on the host Docker
 up(){ (echo > /dev/tcp/${2:-127.0.0.1}/$1) >/dev/null 2>&1; }
-start(){ n=$1; p=$2; shift 2; if up $p; then log "$n already on $p"; else log "starting $n on $p"; nohup "$@" > ~/logs/$n.log 2>&1 & disown; fi; }
 
-if [ ! -x ~/bin/docker ]; then log "installing docker cli"; curl -sL https://download.docker.com/linux/static/stable/$(uname -m)/docker-28.5.1.tgz | tar -xz -C /tmp && mv /tmp/docker/docker ~/bin/; fi
-if [ ! -x ~/.docker/cli-plugins/docker-compose ]; then log "installing compose plugin"; mkdir -p ~/.docker/cli-plugins; curl -sL -o ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m); chmod +x ~/.docker/cli-plugins/docker-compose; fi
+if [ ! -x ~/bin/docker ]; then
+  log "installing docker cli"
+  curl -sL "https://download.docker.com/linux/static/stable/$(uname -m)/docker-28.5.1.tgz" | tar -xz -C /tmp
+  mv /tmp/docker/docker ~/bin/
+fi
+if [ ! -x ~/.docker/cli-plugins/docker-compose ]; then
+  log "installing compose plugin"
+  mkdir -p ~/.docker/cli-plugins
+  curl -sL -o ~/.docker/cli-plugins/docker-compose "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)"
+  chmod +x ~/.docker/cli-plugins/docker-compose
+fi
 [ -w /var/run/docker.sock ] || sudo -n chmod 666 /var/run/docker.sock
 
 if [ -d ~/voicecoder/.git ]; then
   cd ~/voicecoder
-  git submodule update -q --init --remote || log "submodule update failed"
+  # Pin to the repo's recorded submodule commits (fast). Use --remote only when
+  # you intentionally want bleeding-edge bridge/frontend.
+  git submodule update -q --init || log "submodule update failed"
 
   export COMPOSE_PROJECT_NAME="${VC_COMPOSE_PROJECT:-voicecoder}"
   export FRONTEND_PUBLISH="${VC_FRONTEND_PORT:-80}:80"
@@ -58,26 +83,39 @@ if [ -d ~/voicecoder/.git ]; then
   export WHISPER_PUBLISH="${VC_WHISPER_PORT:-8080}:8080"
   export VSCODE_PUBLISH="${VC_VSCODE_PORT:-3000}:3000"
   export VC_HOME_EXTERNAL=true
-  # The agent (AgentAPI and Claude Code) runs in the bridge's compose stack and
-  # shares this home volume, so it works in the same ~/project.
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then export BRIDGE_AGENT=agentapi; else log "no API key: bridge only transcribes"; fi
   rm -f docker-compose.override.yml
 
-  log "downloading Parakeet model into the compose volume"
-  if ! docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1; then
+  # Rebuild only when images are missing; otherwise just start (much faster).
+  need_build=0
+  for img in whisper bridge agent frontend; do
+    if ! docker image inspect "${COMPOSE_PROJECT_NAME}-${img}:latest" >/dev/null 2>&1; then
+      need_build=1
+      break
+    fi
+  done
+
+  log "ensuring Parakeet model (no-op if already downloaded)"
+  docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || {
     log "model download failed, see ~/logs/model-download.log"
     tail -n 40 ~/logs/model-download.log 2>/dev/null || true
+  }
+
+  if [ "$need_build" = 1 ]; then
+    log "docker compose up --build (first boot; can take several minutes)"
+    compose_args=(up -d --build)
+  else
+    log "docker compose up (cached images)"
+    compose_args=(up -d --no-build)
   fi
-  log "docker compose up (first build takes several minutes)"
-  if ! docker compose up -d --build > ~/logs/compose.log 2>&1; then
+  if ! docker compose "${compose_args[@]}" > ~/logs/compose.log 2>&1; then
     log "compose up failed, see ~/logs/compose.log"
     tail -n 80 ~/logs/compose.log 2>/dev/null || true
   fi
 
-  # Wait for STT process (healthz). Model may still be loading in the background.
-  log "waiting for whisper/parakeet health"
+  log "waiting for whisper healthz"
   whisper_ok=0
-  for i in $(seq 1 36); do
+  for _ in $(seq 1 36); do
     if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
       whisper_ok=1
       break
@@ -86,21 +124,16 @@ if [ -d ~/voicecoder/.git ]; then
   done
   if [ "$whisper_ok" = 1 ]; then
     log "OK   whisper process"
-    if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/ready >/dev/null 2>&1; then
-      log "OK   whisper model ready"
-    else
-      log "whisper model still loading — first utterances may fail until ready"
-      docker compose logs --tail 30 whisper || true
-    fi
   else
-    log "DOWN whisper — speech will fail. Logs:"
+    log "DOWN whisper — see ~/logs/compose.log"
     docker compose ps whisper >> ~/logs/compose.log 2>&1 || true
     docker compose logs --tail 80 whisper >> ~/logs/compose.log 2>&1 || true
-    tail -n 80 ~/logs/compose.log 2>/dev/null || true
   fi
+
+  # Bring bridge up even if the earlier compose pass stalled on health.
+  docker compose up -d bridge >/dev/null 2>&1 || true
   cd ~
 
-  # Agent dials 127.0.0.1 only. Forward that to the host port where Compose published nginx.
   gw=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)
   if [ -z "$gw" ]; then gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}'); fi
   port="${VC_FRONTEND_PORT:-80}"
@@ -116,7 +149,7 @@ else
   log "skip compose: ~/voicecoder missing"
 fi
 
-sleep 3
+sleep 2
 up 8088 127.0.0.1 && log "OK   frontend (127.0.0.1:8088)" || log "DOWN frontend (127.0.0.1:8088)"
 if [ "${BRIDGE_AGENT:-}" = agentapi ]; then
   (cd ~/voicecoder && docker compose exec -T agent curl -fs localhost:3284/status >/dev/null 2>&1) && log "OK   agent container" || log "DOWN agent container"
