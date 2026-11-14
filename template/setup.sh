@@ -62,10 +62,35 @@ if [ -d ~/voicecoder/.git ]; then
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then export BRIDGE_AGENT=agentapi; else log "no API key: bridge only transcribes"; fi
   rm -f docker-compose.override.yml
 
-  log "downloading whisper model into the compose volume"
-  docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || log "model download failed, see ~/logs/model-download.log"
+  log "downloading Parakeet model into the compose volume"
+  if ! docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1; then
+    log "model download failed, see ~/logs/model-download.log"
+    tail -n 40 ~/logs/model-download.log 2>/dev/null || true
+  fi
   log "docker compose up (first build takes several minutes)"
-  docker compose up -d --build > ~/logs/compose.log 2>&1 || log "compose up failed, see ~/logs/compose.log"
+  if ! docker compose up -d --build > ~/logs/compose.log 2>&1; then
+    log "compose up failed, see ~/logs/compose.log"
+    tail -n 80 ~/logs/compose.log 2>/dev/null || true
+  fi
+
+  # Wait for STT; without it the bridge reports "no such host" for whisper.
+  log "waiting for whisper/parakeet health"
+  whisper_ok=0
+  for i in $(seq 1 60); do
+    if docker compose exec -T whisper curl -sf http://127.0.0.1:8080/ >/dev/null 2>&1; then
+      whisper_ok=1
+      break
+    fi
+    sleep 5
+  done
+  if [ "$whisper_ok" = 1 ]; then
+    log "OK   whisper"
+  else
+    log "DOWN whisper — speech will fail. Logs:"
+    docker compose ps whisper >> ~/logs/compose.log 2>&1 || true
+    docker compose logs --tail 80 whisper >> ~/logs/compose.log 2>&1 || true
+    tail -n 80 ~/logs/compose.log 2>/dev/null || true
+  fi
   cd ~
 
   # Agent dials 127.0.0.1 only. Forward that to the host port where Compose published nginx.
