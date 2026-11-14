@@ -1,0 +1,11 @@
+include:
+  - ./bridge/docker-compose.yml
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+
