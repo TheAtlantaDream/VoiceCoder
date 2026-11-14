@@ -92,13 +92,22 @@ cd ~/voicecoder
 set -a; [ -f ~/logs/compose-env ] && . ~/logs/compose-env; set +a
 log(){ echo "[compose-boot] $*"; }
 
-log "ensuring Parakeet model volume (shared host-wide)"
+# Whisper image owns download_model.py — rebuild it first so a new script
+# always runs, even when other images are already cached on the host.
+log "building whisper image (cached unless scripts changed)"
+docker compose build whisper > ~/logs/compose-build-whisper.log 2>&1 || {
+  log "whisper build failed — see ~/logs/compose-build-whisper.log"
+  exit 1
+}
+
+log "ensuring Parakeet model volume (shared host-wide; incomplete trees are wiped)"
 docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || {
   log "model download failed — see ~/logs/model-download.log"
+  exit 1
 }
 
 if [ "${VC_NEED_BUILD:-0}" = 1 ]; then
-  log "building shared images (first workspace on this host; later ones reuse them)"
+  log "building remaining shared images (first workspace on this host)"
   docker compose build > ~/logs/compose-build.log 2>&1 || {
     log "build failed — see ~/logs/compose-build.log"
     exit 1
