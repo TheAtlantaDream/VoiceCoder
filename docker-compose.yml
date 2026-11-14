@@ -1,16 +1,3 @@
 include:
   - ./bridge/docker-compose.yml
-
-services:
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "80:80"
-    environment:
-      - DEFAULT_BRIDGE_URL=ws://localhost:8000/ws
-      - TARGET_SAMPLE_RATE=16000
-    depends_on:
-      - bridge
-
+  - ./frontend/docker-compose.yml
