@@ -13,6 +13,30 @@ variable "anthropic_api_key" {
   default   = ""
 }
 
+# Per workspace switch: "native" runs Whisper and the bridge inside the workspace (proven path).
+# "compose" runs the VoiceCoder repo's docker-compose.yml (whisper, bridge, frontend) on the host Docker.
+data "coder_parameter" "runtime" {
+  name         = "runtime"
+  display_name = "Service runtime"
+  description  = "native = run inside the workspace. compose = run VoiceCoder docker-compose on the host Docker (one workspace at a time)."
+  type         = "string"
+  default      = "native"
+  mutable      = true
+  option {
+    name  = "Native (inside workspace)"
+    value = "native"
+  }
+  option {
+    name  = "Docker Compose (host Docker)"
+    value = "compose"
+  }
+}
+
+locals {
+  compose  = data.coder_parameter.runtime.value == "compose"
+  svc_host = local.compose ? "host.docker.internal" : "localhost"
+}
+
 data "coder_provisioner" "me" {}
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
@@ -22,6 +46,7 @@ resource "coder_agent" "main" {
   os   = "linux"
   env = {
     ANTHROPIC_API_KEY = var.anthropic_api_key
+    VC_RUNTIME        = data.coder_parameter.runtime.value
   }
   metadata {
     display_name = "CPU"
@@ -68,7 +93,18 @@ resource "coder_app" "bridge" {
   slug         = "bridge"
   display_name = "Voice bridge"
   icon         = "/icon/widgets.svg"
-  url          = "http://localhost:8000/health"
+  url          = "http://${local.svc_host}:8000/health"
+  subdomain    = false
+  share        = "owner"
+}
+
+resource "coder_app" "frontend" {
+  count        = local.compose ? 1 : 0
+  agent_id     = coder_agent.main.id
+  slug         = "frontend"
+  display_name = "Frontend"
+  icon         = "/icon/widgets.svg"
+  url          = "http://host.docker.internal:80"
   subdomain    = false
   share        = "owner"
 }
@@ -102,6 +138,14 @@ resource "docker_container" "workspace" {
   host {
     host = "host.docker.internal"
     ip   = "host-gateway"
+  }
+  # compose mode only: give the workspace the host Docker so it can run docker compose
+  dynamic "volumes" {
+    for_each = local.compose ? [1] : []
+    content {
+      container_path = "/var/run/docker.sock"
+      host_path      = "/var/run/docker.sock"
+    }
   }
   volumes {
     container_path = "/home/coder"
