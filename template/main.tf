@@ -70,16 +70,18 @@ resource "coder_script" "voicecoder_setup" {
 }
 
 # Subdomain so /vscode/ and /ws stay on the frontend origin. Requires a wildcard access URL.
+# The agent dials a proxy inside this container. Names like host.docker.internal and frontend
+# resolve on Tailscale, where the published port is not listening.
 resource "coder_app" "frontend" {
   agent_id     = coder_agent.main.id
   slug         = "frontend"
   display_name = "VoiceCoder"
   icon         = "/icon/code.svg"
-  url          = "http://host.docker.internal:${local.frontend_port}"
+  url          = "http://127.0.0.1:8088"
   subdomain    = true
   share        = "owner"
   healthcheck {
-    url       = "http://host.docker.internal:${local.frontend_port}/"
+    url       = "http://127.0.0.1:8088/"
     interval  = 15
     threshold = 120
   }
@@ -88,6 +90,12 @@ resource "coder_app" "frontend" {
 resource "docker_volume" "home" {
   name = local.home_volume
   lifecycle { ignore_changes = all }
+}
+
+# Left in place so an existing workspace can update without deleting a network that
+# Compose containers may still be attached to.
+resource "docker_network" "services" {
+  name = local.compose_project
 }
 
 resource "docker_container" "workspace" {

@@ -10,7 +10,7 @@ case $(uname -m) in x86_64) GOARCH=amd64; NARCH=x64;; aarch64) GOARCH=arm64; NAR
 ORG=https://github.com/TheAtlantaDream
 
 # 1. tools
-if ! command -v cmake >/dev/null; then sudo -n apt-get update -qq && sudo -n apt-get install -y -qq cmake build-essential; fi
+if ! command -v cmake >/dev/null || ! command -v socat >/dev/null; then sudo -n apt-get update -qq && sudo -n apt-get install -y -qq cmake build-essential socat; fi
 if [ ! -x ~/.local/go/bin/go ]; then log "installing go"; V=$(curl -s "https://go.dev/VERSION?m=text" | head -1); curl -sL https://go.dev/dl/$V.linux-$GOARCH.tar.gz | tar -C ~/.local -xz; fi
 if [ ! -x ~/.local/node/bin/node ]; then log "installing node"; F=$(curl -s https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep "linux-$NARCH.tar.xz" | awk '{print $2}'); mkdir -p ~/.local/node; curl -sL https://nodejs.org/dist/latest-v22.x/$F | tar -xJ -C ~/.local/node --strip-components=1; fi
 grep -q voicecoder-path ~/.bashrc 2>/dev/null || echo 'export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH # voicecoder-path' >> ~/.bashrc
@@ -55,12 +55,26 @@ if [ -d ~/voicecoder/.git ]; then
   export WHISPER_PUBLISH="${VC_WHISPER_PORT:-8080}:8080"
   export VSCODE_PUBLISH="${VC_VSCODE_PORT:-3000}:3000"
   export VC_HOME_EXTERNAL=true
+  rm -f docker-compose.override.yml
 
   log "downloading whisper model into the compose volume"
   docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || log "model download failed, see ~/logs/model-download.log"
   log "docker compose up (first build takes several minutes)"
   docker compose up -d --build > ~/logs/compose.log 2>&1 || log "compose up failed, see ~/logs/compose.log"
   cd ~
+
+  # Agent dials 127.0.0.1 only. Forward that to the host port where Compose published nginx.
+  gw=$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)
+  if [ -z "$gw" ]; then gw=$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}'); fi
+  port="${VC_FRONTEND_PORT:-80}"
+  if [ -n "$gw" ] && command -v socat >/dev/null; then
+    if [ -f ~/logs/frontend-proxy.pid ]; then kill "$(cat ~/logs/frontend-proxy.pid)" 2>/dev/null || true; fi
+    nohup socat TCP-LISTEN:8088,bind=127.0.0.1,fork,reuseaddr "TCP:${gw}:${port}" > ~/logs/frontend-proxy.log 2>&1 &
+    echo $! > ~/logs/frontend-proxy.pid
+    log "frontend proxy 127.0.0.1:8088 -> ${gw}:${port}"
+  else
+    log "frontend proxy skipped (gateway=${gw:-missing})"
+  fi
 else
   log "skip compose: ~/voicecoder missing"
 fi
@@ -68,7 +82,6 @@ fi
 if [ -d ~/project/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/project && exec agentapi server --type=claude -- claude'; else log "skip agentapi: needs ~/project and API key"; fi
 
 sleep 3
-FRONT_PORT="${VC_FRONTEND_PORT:-80}"
-up "$FRONT_PORT" host.docker.internal && log "OK   frontend (${FRONT_PORT})" || log "DOWN frontend (${FRONT_PORT})"
+up 8088 127.0.0.1 && log "OK   frontend (127.0.0.1:8088)" || log "DOWN frontend (127.0.0.1:8088)"
 up 3284 && log "OK   agentapi (3284)" || log "DOWN agentapi (3284)"
 exit 0
