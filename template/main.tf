@@ -103,10 +103,6 @@ resource "coder_app" "frontend" {
 resource "docker_volume" "home" {
   name = local.home_volume
   lifecycle { ignore_changes = all }
-  timeouts {
-    create = "2m"
-    delete = "2m"
-  }
 }
 
 resource "docker_container" "workspace" {
@@ -128,9 +124,5 @@ resource "docker_container" "workspace" {
     container_path = "/home/coder"
     volume_name    = docker_volume.home.name
     read_only      = false
-  }
-  timeouts {
-    create = "5m"
-    delete = "5m"
   }
 }
