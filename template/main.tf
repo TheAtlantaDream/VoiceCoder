@@ -97,15 +97,16 @@ resource "coder_app" "frontend" {
   }
 }
 
+# Home volume shared with Compose (agent + VS Code). Compose creates its own
+# network (`${COMPOSE_PROJECT_NAME}_default`); we do not pre-create one here —
+# unused docker_network resources were hanging provision on a busy Docker host.
 resource "docker_volume" "home" {
   name = local.home_volume
   lifecycle { ignore_changes = all }
-}
-
-# Left in place so an existing workspace can update without deleting a network that
-# Compose containers may still be attached to.
-resource "docker_network" "services" {
-  name = local.compose_project
+  timeouts {
+    create = "2m"
+    delete = "2m"
+  }
 }
 
 resource "docker_container" "workspace" {
@@ -127,5 +128,9 @@ resource "docker_container" "workspace" {
     container_path = "/home/coder"
     volume_name    = docker_volume.home.name
     read_only      = false
+  }
+  timeouts {
+    create = "5m"
+    delete = "5m"
   }
 }
