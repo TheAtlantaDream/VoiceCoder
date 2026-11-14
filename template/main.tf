@@ -47,6 +47,7 @@ resource "coder_agent" "main" {
   env = {
     ANTHROPIC_API_KEY = var.anthropic_api_key
     VC_RUNTIME        = data.coder_parameter.runtime.value
+    ANTHROPIC_MODEL   = "claude-haiku-5-5"
   }
   metadata {
     display_name = "CPU"
