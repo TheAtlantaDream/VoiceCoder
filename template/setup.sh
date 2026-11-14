@@ -22,8 +22,23 @@ command -v claude >/dev/null || { log "installing claude code"; npm install -g @
 sync_repo(){ if [ -d ~/$1/.git ]; then git -C ~/$1 pull --ff-only -q || log "pull skipped for $1"; else git clone -q $ORG/$2 ~/$1 || log "clone skipped for $2 (not pushed yet?)"; fi; }
 sync_repo voicecoder VoiceCoder
 sync_repo voicecoder-bridge voicecoder-bridge
-sync_repo beta-test-demo beta-test-demo
-mkdir -p ~/beta-test-demo
+mkdir -p ~/project
+[ -d ~/project/.git ] || git -C ~/project init -q
+git config --global user.email >/dev/null || { git config --global user.name "VoiceCoder User"; git config --global user.email "voicecoder@localhost"; }
+
+# agent rules for the whole workspace: create, or append if our section is missing. Never overwrite.
+mkdir -p ~/.claude
+if ! grep -q "# VoiceCoder rules" ~/.claude/CLAUDE.md 2>/dev/null; then
+  [ -s ~/.claude/CLAUDE.md ] && echo >> ~/.claude/CLAUDE.md
+  cat >> ~/.claude/CLAUDE.md <<'RULES'
+# VoiceCoder rules
+<!-- PLACEHOLDER until Carter sends the final rules. Replace everything below this line. -->
+- Work only inside ~/project.
+- Never run git commit, git push, or any command that changes git history. The user approves changes by voice.
+- Keep changes small and focused on the request.
+RULES
+  log "wrote VoiceCoder rules to ~/.claude/CLAUDE.md"
+fi
 
 # 3. whisper (native mode only)
 if [ "$RUNTIME" = native ]; then
@@ -68,11 +83,10 @@ else
 fi
 
 # these always run inside the workspace
-if [ -d ~/beta-test-demo/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/beta-test-demo && exec agentapi server -- claude'; else log "skip agentapi: needs beta-test-demo repo and API key"; fi
-if [ -f ~/voicecoder/server/go.mod ]; then (cd ~/voicecoder/server && go build -o ~/bin/voicecoder-server .) && start server 8090 ~/bin/voicecoder-server; else log "skip server 8090: voicecoder/server not pushed yet"; fi
+if [ -d ~/project/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/project && exec agentapi server --type=claude -- claude'; else log "skip agentapi: needs ~/project and API key"; fi
 
 sleep 3
 for pr in 8080:whisper 8000:bridge; do up ${pr%%:*} $SVC && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
 [ "$RUNTIME" = compose ] && { up 80 $SVC && log "OK   frontend (80)" || log "DOWN frontend (80)"; }
-for pr in 3284:agentapi 8090:server; do up ${pr%%:*} && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
+for pr in 3284:agentapi; do up ${pr%%:*} && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
 exit 0
