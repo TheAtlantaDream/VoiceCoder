@@ -73,21 +73,6 @@ resource "coder_script" "voicecoder_setup" {
   script       = file("${path.module}/setup.sh")
 }
 
-resource "coder_app" "voicecoder" {
-  agent_id     = coder_agent.main.id
-  slug         = "voicecoder"
-  display_name = "VoiceCoder"
-  icon         = "/icon/widgets.svg"
-  url          = "http://localhost:8090"
-  subdomain    = false
-  share        = "owner"
-  healthcheck {
-    url       = "http://localhost:8090"
-    interval  = 10
-    threshold = 30
-  }
-}
-
 resource "coder_app" "bridge" {
   agent_id     = coder_agent.main.id
   slug         = "bridge"
@@ -113,7 +98,7 @@ module "code-server" {
   count    = data.coder_workspace.me.start_count
   source   = "registry.coder.com/coder/code-server/coder"
   agent_id = coder_agent.main.id
-  folder   = "/home/coder/beta-test-demo"
+  folder   = "/home/coder/project"
   settings = {
     "editor.fontSize"              = 22
     "terminal.integrated.fontSize" = 20
