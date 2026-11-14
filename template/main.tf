@@ -7,10 +7,18 @@ terraform {
 
 provider "docker" {}
 
-variable "anthropic_api_key" {
-  type      = string
-  sensitive = true
-  default   = ""
+# Shown on the workspace create/start form so each user can paste their own key.
+# Ephemeral: not kept in workspace metadata between builds; re-enter on restart.
+data "coder_parameter" "anthropic_api_key" {
+  name         = "anthropic_api_key"
+  display_name = "Anthropic API Key"
+  description  = "Needed for the coding agent. Leave empty to only transcribe and clean."
+  type         = "string"
+  form_type    = "input"
+  mutable      = true
+  ephemeral    = true
+  default      = ""
+  order        = 1
 }
 
 data "coder_provisioner" "me" {}
@@ -33,7 +41,7 @@ resource "coder_agent" "main" {
   arch = data.coder_provisioner.me.arch
   os   = "linux"
   env = {
-    ANTHROPIC_API_KEY  = var.anthropic_api_key
+    ANTHROPIC_API_KEY  = data.coder_parameter.anthropic_api_key.value
     ANTHROPIC_MODEL    = "claude-haiku-5-5"
     VC_FRONTEND_PORT   = tostring(local.frontend_port)
     VC_BRIDGE_PORT     = tostring(local.bridge_port)
