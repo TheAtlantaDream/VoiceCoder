@@ -1,6 +1,6 @@
 [submodule "bridge"]
 	path = bridge
-	url = github.com:TheAtlantaDream/VoiceCoder-bridge
+	url = https://github.com/TheAtlantaDream/voicecoder-bridge
 [submodule "frontend"]
 	path = frontend
-	url = github.com:TheAtlantaDream/VoiceCoder-frontend
+	url = https://github.com/TheAtlantaDream/voicecoder-frontend

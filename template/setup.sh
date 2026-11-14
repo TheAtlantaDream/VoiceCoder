@@ -3,8 +3,7 @@
 set -uo pipefail
 export GIT_TERMINAL_PROMPT=0
 export GIT_ASKPASS=/bin/false
-RUNTIME=${VC_RUNTIME:-native}
-mkdir -p ~/bin ~/.local ~/logs
+mkdir -p ~/bin ~/.local ~/logs ~/project
 log(){ echo "[setup] $*"; }
 export PATH=$HOME/bin:$HOME/.local/go/bin:$HOME/.local/node/bin:$PATH
 case $(uname -m) in x86_64) GOARCH=amd64; NARCH=x64;; aarch64) GOARCH=arm64; NARCH=arm64;; esac
@@ -21,8 +20,6 @@ command -v claude >/dev/null || { log "installing claude code"; npm install -g @
 # 2. repos
 sync_repo(){ if [ -d ~/$1/.git ]; then git -C ~/$1 pull --ff-only -q || log "pull skipped for $1"; else git clone -q $ORG/$2 ~/$1 || log "clone skipped for $2 (not pushed yet?)"; fi; }
 sync_repo voicecoder VoiceCoder
-sync_repo voicecoder-bridge voicecoder-bridge
-mkdir -p ~/project
 [ -d ~/project/.git ] || git -C ~/project init -q
 git config --global user.email >/dev/null || { git config --global user.name "VoiceCoder User"; git config --global user.email "voicecoder@localhost"; }
 
@@ -40,53 +37,38 @@ RULES
   log "wrote VoiceCoder rules to ~/.claude/CLAUDE.md"
 fi
 
-# 3. whisper (native mode only)
-if [ "$RUNTIME" = native ]; then
-if [ ! -x ~/whisper.cpp/build/bin/whisper-server ]; then log "building whisper (a few minutes the first time)"; [ -d ~/whisper.cpp ] || git clone -q --depth 1 https://github.com/ggml-org/whisper.cpp ~/whisper.cpp; (cd ~/whisper.cpp && cmake -B build -DCMAKE_BUILD_TYPE=Release > ~/logs/cmake.log 2>&1 && cmake --build build -j$(nproc) --target whisper-server >> ~/logs/cmake.log 2>&1); fi
-[ -f ~/whisper.cpp/models/ggml-small.en.bin ] || { log "downloading whisper model"; (cd ~/whisper.cpp && bash models/download-ggml-model.sh small.en >/dev/null 2>&1); }
-fi
-
-# 4. services
+# 3. services. Compose runs on the host Docker. The frontend proxies /ws to the bridge and /vscode/ to VS Code.
 up(){ (echo > /dev/tcp/${2:-127.0.0.1}/$1) >/dev/null 2>&1; }
 start(){ n=$1; p=$2; shift 2; if up $p; then log "$n already on $p"; else log "starting $n on $p"; nohup "$@" > ~/logs/$n.log 2>&1 & disown; fi; }
-SVC=127.0.0.1
 
-if [ "$RUNTIME" = compose ]; then
-  SVC=host.docker.internal
-  log "runtime: docker compose on host Docker"
-  # docker CLI and compose plugin into the home folder
-  if [ ! -x ~/bin/docker ]; then log "installing docker cli"; curl -sL https://download.docker.com/linux/static/stable/$(uname -m)/docker-28.5.1.tgz | tar -xz -C /tmp && mv /tmp/docker/docker ~/bin/; fi
-  if [ ! -x ~/.docker/cli-plugins/docker-compose ]; then log "installing compose plugin"; mkdir -p ~/.docker/cli-plugins; curl -sL -o ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m); chmod +x ~/.docker/cli-plugins/docker-compose; fi
-  [ -w /var/run/docker.sock ] || sudo -n chmod 666 /var/run/docker.sock
-  # submodules: the repo's .gitmodules URLs are missing https://, so override them locally
-  if [ -d ~/voicecoder/.git ]; then
-    cd ~/voicecoder
-    git submodule init -q
-    git config submodule.bridge.url https://github.com/TheAtlantaDream/voicecoder-bridge
-    git config submodule.frontend.url https://github.com/TheAtlantaDream/VoiceCoder-frontend
-    git submodule update -q --remote || log "submodule update failed"
-    # same project name for both steps, so the model lands in the volume whisper reads
-    export COMPOSE_PROJECT_NAME=voicecoder
-    log "downloading whisper model (model-download.sh, skips if present)"
-    docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || log "model download failed, see ~/logs/model-download.log"
-    log "docker compose up (first build takes several minutes)"
-    docker compose up -d --build > ~/logs/compose.log 2>&1 || log "compose up failed, see ~/logs/compose.log"
-    cd ~
-  else
-    log "skip compose: ~/voicecoder missing"
-  fi
+if [ ! -x ~/bin/docker ]; then log "installing docker cli"; curl -sL https://download.docker.com/linux/static/stable/$(uname -m)/docker-28.5.1.tgz | tar -xz -C /tmp && mv /tmp/docker/docker ~/bin/; fi
+if [ ! -x ~/.docker/cli-plugins/docker-compose ]; then log "installing compose plugin"; mkdir -p ~/.docker/cli-plugins; curl -sL -o ~/.docker/cli-plugins/docker-compose https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m); chmod +x ~/.docker/cli-plugins/docker-compose; fi
+[ -w /var/run/docker.sock ] || sudo -n chmod 666 /var/run/docker.sock
+
+if [ -d ~/voicecoder/.git ]; then
+  cd ~/voicecoder
+  git submodule update -q --init --remote || log "submodule update failed"
+
+  export COMPOSE_PROJECT_NAME="${VC_COMPOSE_PROJECT:-voicecoder}"
+  export FRONTEND_PUBLISH="${VC_FRONTEND_PORT:-80}:80"
+  export BRIDGE_PUBLISH="${VC_BRIDGE_PORT:-8000}:8000"
+  export WHISPER_PUBLISH="${VC_WHISPER_PORT:-8080}:8080"
+  export VSCODE_PUBLISH="${VC_VSCODE_PORT:-3000}:3000"
+  export VC_HOME_EXTERNAL=true
+
+  log "downloading whisper model into the compose volume"
+  docker compose --profile setup run --rm model-download > ~/logs/model-download.log 2>&1 || log "model download failed, see ~/logs/model-download.log"
+  log "docker compose up (first build takes several minutes)"
+  docker compose up -d --build > ~/logs/compose.log 2>&1 || log "compose up failed, see ~/logs/compose.log"
+  cd ~
 else
-  log "runtime: native"
-  T=$(nproc); [ $T -le 8 ] || T=8
-  start whisper 8080 ~/whisper.cpp/build/bin/whisper-server -m ~/whisper.cpp/models/ggml-small.en.bin --host 127.0.0.1 --port 8080 -t $T
-  if [ -d ~/voicecoder-bridge/cmd/bridge ]; then (cd ~/voicecoder-bridge && go build -o ~/bin/voicecoder-bridge ./cmd/bridge) && start bridge 8000 ~/bin/voicecoder-bridge -addr :8000 -whisper-url http://localhost:8080; fi
+  log "skip compose: ~/voicecoder missing"
 fi
 
-# these always run inside the workspace
 if [ -d ~/project/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/project && exec agentapi server --type=claude -- claude'; else log "skip agentapi: needs ~/project and API key"; fi
 
 sleep 3
-for pr in 8080:whisper 8000:bridge; do up ${pr%%:*} $SVC && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
-[ "$RUNTIME" = compose ] && { up 80 $SVC && log "OK   frontend (80)" || log "DOWN frontend (80)"; }
-for pr in 3284:agentapi; do up ${pr%%:*} && log "OK   ${pr#*:} (${pr%%:*})" || log "DOWN ${pr#*:} (${pr%%:*})"; done
+FRONT_PORT="${VC_FRONTEND_PORT:-80}"
+up "$FRONT_PORT" host.docker.internal && log "OK   frontend (${FRONT_PORT})" || log "DOWN frontend (${FRONT_PORT})"
+up 3284 && log "OK   agentapi (3284)" || log "DOWN agentapi (3284)"
 exit 0
