@@ -29,10 +29,12 @@ if ! grep -q "# VoiceCoder rules" ~/.claude/CLAUDE.md 2>/dev/null; then
   [ -s ~/.claude/CLAUDE.md ] && echo >> ~/.claude/CLAUDE.md
   cat >> ~/.claude/CLAUDE.md <<'RULES'
 # VoiceCoder rules
-<!-- PLACEHOLDER until Carter sends the final rules. Replace everything below this line. -->
-- Work only inside ~/project.
-- Never run git commit, git push, or any command that changes git history. The user approves changes by voice.
-- Keep changes small and focused on the request.
+- Work only inside the project folder you were started in. Never run git push.
+- Never commit unless the user says "approve". On approve, commit all current changes with a short message describing them.
+- If a request is unclear, ask one short clarifying question and change nothing until the user answers.
+- You may install packages or download what a request needs. Say so in your summary when you do.
+- Use your judgment on whether to run the project's tests after a change, based on how the user has set up and is using them. Whenever you do run tests, say in your summary whether they passed.
+- End every reply with a summary of at most five sentences. Write it as plain text with no symbols or markdown, describing in everyday language what you did and what it means for the user. Do not make it overly technical.
 RULES
   log "wrote VoiceCoder rules to ~/.claude/CLAUDE.md"
 fi
