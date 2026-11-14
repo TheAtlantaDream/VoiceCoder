@@ -57,6 +57,9 @@ if [ -d ~/voicecoder/.git ]; then
   export WHISPER_PUBLISH="${VC_WHISPER_PORT:-8080}:8080"
   export VSCODE_PUBLISH="${VC_VSCODE_PORT:-3000}:3000"
   export VC_HOME_EXTERNAL=true
+  # The agent (AgentAPI and Claude Code) runs in the bridge's compose stack and
+  # shares this home volume, so it works in the same ~/project.
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then export BRIDGE_AGENT=agentapi; else log "no API key: bridge only transcribes"; fi
   rm -f docker-compose.override.yml
 
   log "downloading whisper model into the compose volume"
@@ -81,9 +84,9 @@ else
   log "skip compose: ~/voicecoder missing"
 fi
 
-if [ -d ~/project/.git ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then start agentapi 3284 bash -c 'cd ~/project && exec agentapi server --type=claude -- claude'; else log "skip agentapi: needs ~/project and API key"; fi
-
 sleep 3
 up 8088 127.0.0.1 && log "OK   frontend (127.0.0.1:8088)" || log "DOWN frontend (127.0.0.1:8088)"
-up 3284 && log "OK   agentapi (3284)" || log "DOWN agentapi (3284)"
+if [ "${BRIDGE_AGENT:-}" = agentapi ]; then
+  (cd ~/voicecoder && docker compose exec -T agent curl -fs localhost:3284/status >/dev/null 2>&1) && log "OK   agent container" || log "DOWN agent container"
+fi
 exit 0
