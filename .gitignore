@@ -1,0 +1,4 @@
+.env
+template/template.zip
+*.log
+.DS_Store
