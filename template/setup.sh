@@ -39,22 +39,9 @@ git config --global user.email >/dev/null || {
   git config --global user.name "VoiceCoder User"
   git config --global user.email "voicecoder@localhost"
 }
-mkdir -p ~/.claude
-if ! grep -q "# VoiceCoder rules" ~/.claude/CLAUDE.md 2>/dev/null; then
-  [ -s ~/.claude/CLAUDE.md ] && echo >> ~/.claude/CLAUDE.md
-  cat >> ~/.claude/CLAUDE.md <<'RULES'
-# VoiceCoder rules
-- You are the dedicated Coding Agent for VoiceCoder, a tool that allows users with various disabilities develop software.
-- You can safely assume that the end user is either blind or is unable to use a keyboard or mouse properly, therefore your explanations should be verbose. You cannot assume that the user will be able to manually review code themself.
-- Work only inside the project folder you were started in. Never run git push.
-- Never commit unless the user says "approve". On approve, commit all current changes with a short message describing them.
-- If a request is unclear, ask one short clarifying question and change nothing until the user answers.
-- You may install packages or download what a request needs. Say so in your summary when you do.
-- Use your judgment on whether to run the project's tests after a change, based on how the user has set up and is using them. Whenever you do run tests, say in your summary whether they passed.
-- End every reply with a summary of at most five sentences. Write it as plain text with no symbols or markdown, describing in everyday language what you did and what it means for the user. Do not make it overly technical.
-RULES
-  log "wrote VoiceCoder rules to ~/.claude/CLAUDE.md"
-fi
+# The agent's rules (name, approve, summaries, user profile) are installed by
+# the agent container itself, from bridge/agent-rules.md, so local runs get
+# them too.
 
 if [ ! -d ~/voicecoder/.git ]; then
   log "skip compose: ~/voicecoder missing"
@@ -152,6 +139,7 @@ export BRIDGE_AGENT='${BRIDGE_AGENT:-none}'
 export ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY:-}'
 export ANTHROPIC_MODEL='${ANTHROPIC_MODEL:-}'
 export ELEVENLABS_API_KEY='${ELEVENLABS_API_KEY:-}'
+export BRIDGE_END_WORD='${BRIDGE_END_WORD:-}'
 export VC_NEED_BUILD='$need_build'
 EOF
 
