@@ -57,6 +57,7 @@ resource "coder_agent" "main" {
     ANTHROPIC_API_KEY  = data.coder_parameter.anthropic_api_key.value
     ANTHROPIC_MODEL    = "claude-haiku-5-5"
     ELEVENLABS_API_KEY = data.coder_parameter.elevenlabs_api_key.value
+    BRIDGE_END_WORD    = "over"
     VC_FRONTEND_PORT   = tostring(local.frontend_port)
     VC_BRIDGE_PORT     = tostring(local.bridge_port)
     VC_WHISPER_PORT    = tostring(local.whisper_port)
