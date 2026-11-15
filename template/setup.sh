@@ -92,11 +92,12 @@ cd ~/voicecoder
 set -a; [ -f ~/logs/compose-env ] && . ~/logs/compose-env; set +a
 log(){ echo "[compose-boot] $*"; }
 
-# Whisper image owns download_model.py — rebuild it first so a new script
-# always runs, even when other images are already cached on the host.
-log "building whisper image (cached unless scripts changed)"
-docker compose build whisper > ~/logs/compose-build-whisper.log 2>&1 || {
-  log "whisper build failed — see ~/logs/compose-build-whisper.log"
+# Always rebuild whisper + bridge (BuildKit cache makes this cheap when
+# unchanged). Shared :latest tags otherwise leave workspaces on old binaries —
+# e.g. wake-word fixes never landed because bridge was skipped when images existed.
+log "building whisper + bridge (cached unless sources changed)"
+docker compose build whisper bridge > ~/logs/compose-build-core.log 2>&1 || {
+  log "whisper/bridge build failed — see ~/logs/compose-build-core.log"
   exit 1
 }
 
@@ -114,9 +115,9 @@ if [ "${VC_NEED_BUILD:-0}" = 1 ]; then
   }
 fi
 
-log "starting services"
-docker compose up -d --no-build > ~/logs/compose.log 2>&1 || \
-  docker compose up -d > ~/logs/compose.log 2>&1 || {
+log "starting services (force-recreate so new bridge/whisper images are used)"
+docker compose up -d --force-recreate --no-build > ~/logs/compose.log 2>&1 || \
+  docker compose up -d --force-recreate > ~/logs/compose.log 2>&1 || {
     log "compose up failed — see ~/logs/compose.log"
     exit 1
   }
@@ -128,7 +129,7 @@ for _ in $(seq 1 60); do
   fi
   sleep 5
 done
-docker compose up -d bridge >/dev/null 2>&1 || true
+docker compose up -d --force-recreate bridge >/dev/null 2>&1 || true
 log "done"
 BOOT
 chmod +x ~/logs/compose-boot.sh
