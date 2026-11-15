@@ -21,6 +21,19 @@ data "coder_parameter" "anthropic_api_key" {
   order        = 1
 }
 
+# Optional. With a key the bridge reads each agent summary aloud.
+data "coder_parameter" "elevenlabs_api_key" {
+  name         = "elevenlabs_api_key"
+  display_name = "ElevenLabs API Key"
+  description  = "Reads the agent's summary aloud. Leave empty for no speech."
+  type         = "string"
+  form_type    = "input"
+  mutable      = true
+  ephemeral    = true
+  default      = ""
+  order        = 2
+}
+
 data "coder_provisioner" "me" {}
 data "coder_workspace" "me" {}
 data "coder_workspace_owner" "me" {}
@@ -43,6 +56,7 @@ resource "coder_agent" "main" {
   env = {
     ANTHROPIC_API_KEY  = data.coder_parameter.anthropic_api_key.value
     ANTHROPIC_MODEL    = "claude-haiku-5-5"
+    ELEVENLABS_API_KEY = data.coder_parameter.elevenlabs_api_key.value
     VC_FRONTEND_PORT   = tostring(local.frontend_port)
     VC_BRIDGE_PORT     = tostring(local.bridge_port)
     VC_WHISPER_PORT    = tostring(local.whisper_port)
